@@ -39,6 +39,31 @@
   #interact-prompt.visible { opacity:1; }
 
   #help-hint { position:fixed; top:20px; right:24px; color:rgba(200,190,160,0.4); font-size:11px; letter-spacing:2px; z-index:40; pointer-events:none; text-align:right; line-height:1.8; }
+
+  /* ================================================
+     MOBILE CONTROLS — hidden on desktop, shown on touch devices
+     ================================================ */
+  #mobile-controls { display:none; }
+  body.touch-device #mobile-controls { display:block; }
+  body.touch-device #help-hint { display:none; }
+  body.touch-device canvas { touch-action:none; }
+
+  /* Left joystick zone */
+  #joystick-zone { position:fixed; left:0; bottom:0; width:45vw; height:60vh; z-index:60; }
+  #joystick-base { position:absolute; width:120px; height:120px; border-radius:50%; background:rgba(200,200,220,0.12); border:2px solid rgba(200,200,220,0.25); left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none; }
+  #joystick-thumb { position:absolute; width:50px; height:50px; border-radius:50%; background:rgba(255,220,150,0.5); box-shadow:0 0 18px rgba(255,200,80,0.35); left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none; transition:opacity 0.1s; }
+
+  /* Right look zone */
+  #look-zone { position:fixed; right:0; bottom:0; width:55vw; height:100vh; z-index:60; }
+
+  /* Action buttons column (right edge) */
+  #action-btns { position:fixed; right:8px; top:50%; transform:translateY(-50%); z-index:65; display:flex; flex-direction:column; gap:8px; }
+  .action-btn { width:52px; height:52px; border-radius:50%; background:rgba(8,12,20,0.7); border:1.5px solid rgba(200,180,140,0.35); color:#e8dcc0; font-size:20px; display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; user-select:none; }
+  .action-btn:active, .action-btn.active { background:rgba(200,180,140,0.25); border-color:#ffd700; }
+  .action-btn.fly-btn { font-size:13px; letter-spacing:1px; }
+  .action-btn.boost-btn { font-size:11px; letter-spacing:1px; width:44px; height:44px; }
+  .action-btn.updown-btn { font-size:24px; }
+  .action-btn.interact-btn { font-size:13px; letter-spacing:1px; width:44px; height:44px; }
 </style>
 </head>
 <body>
@@ -73,6 +98,27 @@
 </div>
 
 <div id="help-hint">WASD 移动 · 鼠标 视角<br>F 飞行/步行 · Shift 加速<br>Space 上升 · Q 下降</div>
+
+<!-- ============================================
+     MOBILE CONTROLS — hidden on desktop by CSS
+     ============================================ -->
+<div id="mobile-controls">
+  <!-- Left joystick for WASD movement -->
+  <div id="joystick-zone">
+    <div id="joystick-base"></div>
+    <div id="joystick-thumb"></div>
+  </div>
+  <!-- Right zone for camera look -->
+  <div id="look-zone"></div>
+  <!-- Action buttons (right edge) -->
+  <div id="action-btns">
+    <div class="action-btn fly-btn" id="btn-fly">御风</div>
+    <div class="action-btn boost-btn" id="btn-boost">加速</div>
+    <div class="action-btn updown-btn" id="btn-up">⬆</div>
+    <div class="action-btn updown-btn" id="btn-down">⬇</div>
+    <div class="action-btn interact-btn" id="btn-interact">探索</div>
+  </div>
+</div>
 <div id="console-log" style="position:fixed;top:5px;left:5px;color:#ffd700;font:11px monospace;z-index:200;pointer-events:none;max-width:50%;"></div>
 
 <script type="importmap">
@@ -785,6 +831,127 @@ function animate() {
 }
 
 // ============================================================
+// MOBILE CONTROLS — touch joystick + look + action buttons
+// ============================================================
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+if (isTouchDevice) {
+  document.body.classList.add('touch-device');
+  console.log('📱 Touch device detected — mobile controls active');
+}
+
+// Joystick (virtual WASD)
+const joystickZone = document.getElementById('joystick-zone');
+const joystickBase = document.getElementById('joystick-base');
+const joystickThumb = document.getElementById('joystick-thumb');
+let joystickId = null, joystickCenterX = 0, joystickCenterY = 0;
+let joyAxisX = 0, joyAxisY = 0; // -1..1, read by movement loop
+
+joystickZone.addEventListener('touchstart', e => {
+  if (joystickId !== null) return;
+  const t = e.changedTouches[0];
+  const rect = joystickZone.getBoundingClientRect();
+  joystickCenterX = t.clientX; joystickCenterY = t.clientY;
+  joystickId = t.identifier;
+  joystickBase.style.left = (t.clientX - rect.left) + 'px';
+  joystickBase.style.top = (t.clientY - rect.top) + 'px';
+  joystickBase.style.opacity = '1';
+  joystickThumb.style.opacity = '1';
+  e.preventDefault();
+}, {passive:false});
+
+document.addEventListener('touchmove', e => {
+  for (let i=0; i<e.changedTouches.length; i++) {
+    const t = e.changedTouches[i];
+    if (t.identifier === joystickId) {
+      const dx = t.clientX - joystickCenterX, dy = t.clientY - joystickCenterY;
+      const maxR = 50;
+      const dist = Math.min(Math.sqrt(dx*dx+dy*dy), maxR);
+      const angle = Math.atan2(dy, dx);
+      const tx = Math.cos(angle)*dist, ty = Math.sin(angle)*dist;
+      joystickThumb.style.transform = `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px))`;
+      joyAxisX = tx / maxR;
+      joyAxisY = -ty / maxR;
+    }
+    // Camera look
+    if (t.identifier === lookTouchId) {
+      const dx = t.clientX - lookPrevX, dy = t.clientY - lookPrevY;
+      camera.rotation.y -= dx * 0.005;
+      camera.rotation.x -= dy * 0.005;
+      camera.rotation.x = Math.max(-1.4, Math.min(1.4, camera.rotation.x));
+      lookPrevX = t.clientX; lookPrevY = t.clientY;
+    }
+  }
+}, {passive:false});
+
+document.addEventListener('touchend', e => {
+  for (let i=0; i<e.changedTouches.length; i++) {
+    if (e.changedTouches[i].identifier === joystickId) {
+      joystickId = null; joyAxisX = 0; joyAxisY = 0;
+      joystickThumb.style.transform = 'translate(-50%, -50%)';
+      joystickBase.style.opacity = '0';
+      joystickThumb.style.opacity = '0';
+    }
+    if (e.changedTouches[i].identifier === lookTouchId) {
+      lookTouchId = null;
+    }
+  }
+}, {passive:false});
+
+document.addEventListener('touchcancel', e => {
+  joystickId = null; joyAxisX = 0; joyAxisY = 0;
+  lookTouchId = null;
+  joystickThumb.style.transform = 'translate(-50%, -50%)';
+  joystickBase.style.opacity = '0'; joystickThumb.style.opacity = '0';
+}, {passive:false});
+
+// Camera look via right half touch
+const lookZone = document.getElementById('look-zone');
+let lookTouchId = null, lookPrevX = 0, lookPrevY = 0;
+
+lookZone.addEventListener('touchstart', e => {
+  for (let i=0; i<e.changedTouches.length; i++) {
+    const t = e.changedTouches[i];
+    if (t.identifier !== joystickId && lookTouchId === null) {
+      lookTouchId = t.identifier;
+      lookPrevX = t.clientX; lookPrevY = t.clientY;
+      e.preventDefault();
+      break;
+    }
+  }
+}, {passive:false});
+
+// Action buttons
+['btn-fly', 'btn-boost', 'btn-up', 'btn-down', 'btn-interact'].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (id === 'btn-fly') {
+      isFlying = !isFlying;
+      const toast = document.getElementById('mode-toast');
+      toast.textContent = isFlying ? '🦅 御风飞行' : '🚶 步行';
+      toast.classList.add('visible');
+      setTimeout(() => toast.classList.remove('visible'), 1500);
+    }
+    if (id === 'btn-boost') { keys['ShiftLeft'] = true; el.classList.add('active'); }
+    if (id === 'btn-up')    { keys['Space'] = true; }
+    if (id === 'btn-down')  { keys['KeyQ'] = true; }
+    if (id === 'btn-interact') { keys['KeyE'] = true; setTimeout(()=>{keys['KeyE']=false; keys._eHandled=false;}, 200); }
+  }, {passive:false});
+  el.addEventListener('touchend', e => {
+    e.preventDefault();
+    if (id === 'btn-boost') { keys['ShiftLeft'] = false; el.classList.remove('active'); }
+    if (id === 'btn-up')    { keys['Space'] = false; }
+    if (id === 'btn-down')  { keys['KeyQ'] = false; }
+  }, {passive:false});
+  el.addEventListener('touchcancel', e => {
+    if (id === 'btn-boost') { keys['ShiftLeft'] = false; el.classList.remove('active'); }
+    if (id === 'btn-up')    { keys['Space'] = false; }
+    if (id === 'btn-down')  { keys['KeyQ'] = false; }
+  }, {passive:false});
+});
+
+// ============================================================
 // CONTROLS — PRESERVED
 // ============================================================
 const keys = {};
@@ -821,10 +988,18 @@ setInterval(() => {
   dir.y = 0; dir.normalize();
   const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0,1,0)).normalize();
 
+  // WASD keys
   if (keys['KeyW']) camera.position.addScaledVector(dir, spd);
   if (keys['KeyS']) camera.position.addScaledVector(dir, -spd);
   if (keys['KeyA']) camera.position.addScaledVector(right, -spd);
   if (keys['KeyD']) camera.position.addScaledVector(right, spd);
+
+  // Mobile joystick (virtual WASD)
+  if (Math.abs(joyAxisX) > 0.15 || Math.abs(joyAxisY) > 0.15) {
+    camera.position.addScaledVector(dir, joyAxisY * spd);
+    camera.position.addScaledVector(right, joyAxisX * spd);
+  }
+
   if (isFlying && keys['Space']) camera.position.y += spd;
   if (isFlying && keys['KeyQ']) camera.position.y -= spd;
 
