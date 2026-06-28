@@ -493,15 +493,16 @@ const loadBuilding = (cfg) => {
     // Shrink slightly so player can still get close
     box.expandByScalar(-1.5);
     buildingColliders.push({ box, name: cfg.name });
+    onModelLoaded();
     console.log('✅ Loaded + collider:', cfg.name, 'box:', box.min.toArray().map(v=>v.toFixed(1)), box.max.toArray().map(v=>v.toFixed(1)));
   }, (p) => {
     if(p.loaded&&p.total&&p.loaded===p.total) console.log('  ✅ 100%: '+cfg.name);
   }, (err) => console.warn('  ❌ Failed: '+cfg.name, err.message||err));
 };
 
-setTimeout(() => {
-  buildingConfigs.forEach((cfg,i) => setTimeout(()=>loadBuilding(cfg), i*600));
-}, 800);
+// 立即并发加载所有模型（不延迟）
+buildingConfigs.forEach(cfg => loadBuilding(cfg));
+console.log('🏗️  Load all: '+buildingConfigs.length+' buildings');
 
 // ============================================================
 // INTERACTIVE PROPS — Danlu (furnace) + Xianjian (sword)
@@ -1049,10 +1050,28 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-setTimeout(() => {
+// Loading screen: hide when all models loaded or after timeout
+let modelsLoadedCount = 0;
+const totalModels = buildingConfigs.length;
+
+function onModelLoaded() {
+  modelsLoadedCount++;
+  if (modelsLoadedCount >= totalModels) {
+    console.log('✅ All ' + totalModels + ' models loaded');
+    hideLoadingScr();
+  }
+}
+
+function hideLoadingScr() {
   const loadEl = document.getElementById('loading');
-  if(loadEl){loadEl.classList.add('hidden');setTimeout(()=>loadEl.remove(),1000);}
-}, 3000);
+  if (loadEl && !loadEl.classList.contains('hidden')) {
+    loadEl.classList.add('hidden');
+    setTimeout(() => loadEl.remove(), 1000);
+  }
+}
+
+// Safety fallback: force-hide loading after 12s
+setTimeout(hideLoadingScr, 12000);
 
 console.log('🐉 天庭仙境启动...');
 animate();
