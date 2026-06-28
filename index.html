@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>仙侠探索 · 天庭仙境</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { overflow:hidden; background:#000; font-family:'PingFang SC','Noto Serif SC',serif; cursor:default; user-select:none; -webkit-user-select:none; }
+  #game-container { width:100vw; height:100vh; }
+  #game-container canvas { display:block; }
+
+  #loading { position:fixed; inset:0; background:radial-gradient(ellipse at center, #0f1a2e 0%, #060d18 100%); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:100; transition:opacity 1s ease; }
+  #loading.hidden { opacity:0; pointer-events:none; }
+  .loading-spinner { width:60px; height:60px; border:2px solid rgba(200,220,255,0.15); border-top-color:#ffd700; border-radius:50%; animation:spin 2s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .loading-text { margin-top:24px; color:#e8d5a3; font-size:22px; letter-spacing:6px; }
+  .loading-sub { margin-top:8px; color:#7a9ab0; font-size:13px; letter-spacing:3px; }
+
+  #mode-toast { position:fixed; top:30%; left:50%; transform:translate(-50%,-50%); color:#f0e8d0; font-size:28px; letter-spacing:6px; pointer-events:none; opacity:0; transition:opacity 0.3s ease; text-shadow:0 0 30px rgba(255,200,100,0.7); z-index:50; }
+  #mode-toast.visible { opacity:1; }
+
+  /* Bottom HUD */
+  #hud { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); display:flex; gap:20px; align-items:center; z-index:40; pointer-events:none; }
+  .hud-panel { background:rgba(8,12,20,0.72); backdrop-filter:blur(12px); border:1px solid rgba(200,180,140,0.22); border-radius:10px; padding:7px 14px; color:#c8bfa8; font-size:12px; letter-spacing:1px; min-width:70px; text-align:center; }
+  .hud-panel .label { font-size:10px; color:#8a8070; letter-spacing:2px; margin-bottom:3px; }
+  .hud-panel .value { font-size:15px; color:#e8dcc0; }
+  .hud-divider { width:1px; height:26px; background:rgba(200,180,140,0.18); }
+
+  /* Exploration progress */
+  #explore-bar { position:fixed; top:32px; left:50%; transform:translateX(-50%); z-index:40; pointer-events:none; display:flex; align-items:center; gap:10px; }
+  .explore-text { color:#d8c898; font-size:14px; letter-spacing:2px; text-shadow:0 0 12px rgba(255,200,80,0.5); }
+  .explore-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin:0 2px; transition:all 0.5s ease; }
+  .explore-dot.found { background:#ffd700; box-shadow:0 0 10px #ffd700; }
+  .explore-dot.missing { background:rgba(255,255,255,0.25); box-shadow:none; }
+
+  /* Interaction prompt */
+  #interact-prompt { position:fixed; bottom:50%; left:50%; transform:translate(-50%,50%); color:#ffd700; font-size:18px; letter-spacing:3px; z-index:45; pointer-events:none; opacity:0; transition:opacity 0.25s ease; text-shadow:0 0 20px rgba(255,200,60,0.7); }
+  #interact-prompt.visible { opacity:1; }
+
+  #help-hint { position:fixed; top:20px; right:24px; color:rgba(200,190,160,0.4); font-size:11px; letter-spacing:2px; z-index:40; pointer-events:none; text-align:right; line-height:1.8; }
+</style>
+</head>
+<body>
+<div id="loading">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">天 庭 仙 境</div>
+  <div class="loading-sub">九霄云外 · 白玉天阶</div>
+</div>
+<div id="mode-toast"></div>
+<div id="game-container"></div>
+
+<!-- Exploration progress bar -->
+<div id="explore-bar">
+  <span class="explore-text">探 索 进 度</span>
+  <span id="dot-danlu" class="explore-dot missing" title="丹炉"></span>
+  <span id="dot-sword" class="explore-dot missing" title="仙剑"></span>
+  <span class="explore-text" id="progress-text" style="font-size:12px;margin-left:4px;">0 / 2</span>
+</div>
+
+<!-- Interaction prompt -->
+<div id="interact-prompt"></div>
+
+<!-- Bottom HUD -->
+<div id="hud">
+  <div class="hud-panel"><div class="label">状态</div><div class="value" id="mode-display">步行</div></div>
+  <div class="hud-divider"></div>
+  <div class="hud-panel"><div class="label">速度</div><div class="value" id="speed-display">静止</div></div>
+  <div class="hud-divider"></div>
+  <div class="hud-panel"><div class="label">X</div><div class="value" id="coord-x">0</div></div>
+  <div class="hud-panel"><div class="label">Y</div><div class="value" id="coord-y">0</div></div>
+  <div class="hud-panel"><div class="label">Z</div><div class="value" id="coord-z">0</div></div>
+</div>
+
+<div id="help-hint">WASD 移动 · 鼠标 视角<br>F 飞行/步行 · Shift 加速<br>Space 上升 · Q 下降</div>
+<div id="console-log" style="position:fixed;top:5px;left:5px;color:#ffd700;font:11px monospace;z-index:200;pointer-events:none;max-width:50%;"></div>
+
+<script type="importmap">
+{ "imports": { "three": "./node_modules/three/build/three.module.js", "three/addons/": "./node_modules/three/examples/jsm/" } }
+</script>
+
+<script type="module">
+// ============================================================
+// CONSOLE PROXY
+// ============================================================
+const logEl = document.getElementById('console-log');
+const origLog = console.log;
+console.log = function(...args) {
+  origLog.apply(console, args);
+  logEl.textContent += args.join(' ') + '\n';
+  const lines = logEl.textContent.split('\n');
+  if (lines.length > 10) logEl.textContent = lines.slice(-10).join('\n');
+};
+
+// ============================================================
+// IMPORTS
+// ============================================================
+console.log('📦 Loading Three.js...');
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const gltfLoader = new GLTFLoader();
+console.log('✅ Three.js v' + THREE.REVISION);
+
+// ============================================================
+// RENDERER
+// ============================================================
+const container = document.getElementById('game-container');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = false;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+container.appendChild(renderer.domElement);
+
+// ============================================================
+// SCENE & CAMERA
+// ============================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8ec8e8);
+// Lighter fog — huge buildings should stay visible at distance
+scene.fog = new THREE.FogExp2(0xd8e8f8, 0.00004);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 2000);
+// Spawn at center, look toward the pagoda in the distance
+camera.position.set(0, 6.0, 10);
+camera.lookAt(0, 35, -120);
+
+// ============================================================
+// LIGHTING
+// ============================================================
+// Main golden divine light (sun from overhead)
+const godLight = new THREE.DirectionalLight(0xfff8e8, 5);
+godLight.position.set(0, 120, 40);
+scene.add(godLight);
+
+// Strong fill from FRONT (positive Z) so buildings face the camera
+const fillLight = new THREE.DirectionalLight(0xf0f0e8, 4);
+fillLight.position.set(0, 30, 80);
+scene.add(fillLight);
+
+// Higher ambient so model colors show vibrantly
+const ambient = new THREE.AmbientLight(0xe8e0d8, 3.0);
+scene.add(ambient);
+
+// Hemisphere — cyan sky / warm cloud bounce
+const hemi = new THREE.HemisphereLight(0xd8f0ff, 0xe8dcc8, 1.2);
+scene.add(hemi);
+
+console.log('💡 Lighting: godLight + fill + ambient + hemi');
+
+// ============================================================
+// MAIN PLATFORM — White Jade Heavenly Platform
+// ============================================================
+const PLATFORM_RADIUS = 80;
+const PLATFORM_Y = 0;
+
+// Main disc
+const platGeo = new THREE.CylinderGeometry(PLATFORM_RADIUS, PLATFORM_RADIUS + 4, 3.0, 100);
+const platMat = new THREE.MeshPhongMaterial({ color:0xf5f0e6, specular:0x333333, shininess:12 });
+const platform = new THREE.Mesh(platGeo, platMat);
+platform.position.y = PLATFORM_Y - 1.5;
+platform.name = 'mainPlatform';
+scene.add(platform);
+
+// Gold trim ring
+const trimGeo = new THREE.TorusGeometry(PLATFORM_RADIUS, 0.45, 16, 128);
+const trimMat = new THREE.MeshPhongMaterial({ color:0xd4af37, specular:0x886622, shininess:70, emissive:0x221100, emissiveIntensity:0.3 });
+const trim = new THREE.Mesh(trimGeo, trimMat);
+trim.rotation.x = -Math.PI / 2;
+trim.position.y = 0.04;
+trim.name = 'platformTrim';
+scene.add(trim);
+
+// Inner decorative rings
+for (let ring = 1; ring <= 5; ring++) {
+  const r = PLATFORM_RADIUS - ring * 6.5;
+  if (r < 2) continue;
+  const rGeo = new THREE.TorusGeometry(r, 0.06, 8, 100);
+  const rMat = new THREE.MeshPhongMaterial({ color:0xe0d0a8, specular:0x222222, shininess:8 });
+  const rMesh = new THREE.Mesh(rGeo, rMat);
+  rMesh.rotation.x = -Math.PI / 2;
+  rMesh.position.y = 0.06;
+  rMesh.name = 'decorRing';
+  scene.add(rMesh);
+}
+
+// Center golden inlay
+const centerGeo = new THREE.CylinderGeometry(3, 3.3, 0.18, 64);
+const centerMat = new THREE.MeshPhongMaterial({ color:0xffcc44, specular:0x886622, shininess:90, emissive:0x332200, emissiveIntensity:0.55 });
+const centerInlay = new THREE.Mesh(centerGeo, centerMat);
+centerInlay.position.y = 0.07;
+centerInlay.name = 'centerInlay';
+scene.add(centerInlay);
+
+console.log('🏛️  Jade platform: r=' + PLATFORM_RADIUS + 'm');
+
+// ============================================================
+// CLOUD SEA — layered cloud puffs below and around platform
+// ============================================================
+function createCloudLayer(y, radius, count, opacity, tint) {
+  const group = new THREE.Group();
+  group.name = 'cloudLayer';
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 8 + Math.random() * radius;
+    const s = 4 + Math.random() * 22;
+    const geo = new THREE.SphereGeometry(1, 8, 6);
+    geo.scale(s, 1.2 + Math.random() * 3, s * (0.5 + Math.random() * 0.4));
+    const mat = new THREE.MeshPhongMaterial({
+      color:tint, specular:0x111111, shininess:2,
+      transparent:true, opacity:opacity * (0.5+Math.random()*0.5),
+      depthWrite:false, side:THREE.DoubleSide,
+    });
+    const cloud = new THREE.Mesh(geo, mat);
+    cloud.position.set(Math.cos(angle)*dist, y+(Math.random()-0.5)*4, Math.sin(angle)*dist);
+    cloud.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, 0);
+    cloud.userData = { baseY:cloud.position.y, phase:Math.random()*Math.PI*2, speed:0.08+Math.random()*0.25 };
+    group.add(cloud);
+  }
+  return group;
+}
+const cloudLayers = [
+  createCloudLayer(-9,  100, 50, 0.65, 0xf8f4f0),
+  createCloudLayer(-20, 150, 70, 0.5,  0xf0ece8),
+  createCloudLayer(-35, 200, 80, 0.4,  0xe8e4e0),
+  createCloudLayer(-4,  60,  30, 0.5,  0xfaf8f4),
+];
+cloudLayers.forEach(l => scene.add(l));
+console.log('☁️  Cloud sea: '+cloudLayers.reduce((s,l)=>s+l.children.length,0)+' puffs');
+
+// ============================================================
+// FLOATING CLOUD PLATFORMS — scattered around
+// ============================================================
+function createCloudPlatform(x, y, z, r) {
+  const g = new THREE.Group();
+  g.name = 'cloudPlatform';
+  const topGeo = new THREE.SphereGeometry(1, 12, 8);
+  topGeo.scale(r, 1.2, r);
+  const top = new THREE.Mesh(topGeo, new THREE.MeshPhongMaterial({
+    color:0xfaf8f4, specular:0x111111, shininess:3,
+    transparent:true, opacity:0.85, depthWrite:true,
+  }));
+  g.add(top);
+  for (let i = 0; i < 5; i++) {
+    const w = new THREE.Mesh(new THREE.SphereGeometry(r*0.35, 8, 6),
+      new THREE.MeshPhongMaterial({ color:0xf5f0ea, specular:0x111111, shininess:2, transparent:true, opacity:0.45, depthWrite:false }));
+    w.position.y = -1 - Math.random()*2;
+    w.position.x = (Math.random()-0.5)*r*2;
+    w.position.z = (Math.random()-0.5)*r*2;
+    g.add(w);
+  }
+  g.position.set(x, y, z);
+  g.userData = { baseY:y, phase:Math.random()*Math.PI*2 };
+  return g;
+}
+const floatingClouds = [
+  createCloudPlatform(65, 15, -50, 8),
+  createCloudPlatform(-60, 20, -45, 7),
+  createCloudPlatform(55, 25, 35, 9),
+  createCloudPlatform(-50, 18, 30, 6),
+  createCloudPlatform(75, 12, -15, 5),
+  createCloudPlatform(-70, 14, -10, 7),
+  createCloudPlatform(30, 22, -65, 6),
+  createCloudPlatform(-35, 28, 55, 8),
+];
+floatingClouds.forEach(c => scene.add(c));
+
+// ============================================================
+// DISTANT PALACE SILHOUETTES
+// ============================================================
+function createPalaceSilhouette(x, y, z, h, w) {
+  const g = new THREE.Group();
+  g.name = 'palaceSilhouette';
+  const hall = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h*0.38, w*0.65),
+    new THREE.MeshPhongMaterial({ color:0xb8a080, specular:0x222222, shininess:5, emissive:0x100800, emissiveIntensity:0.3, flatShading:true })
+  ); hall.position.y = h*0.19; g.add(hall);
+  const roof = new THREE.Mesh(
+    new THREE.ConeGeometry(w*0.72, h*0.35, 8),
+    new THREE.MeshPhongMaterial({ color:0xd4af37, specular:0x664400, shininess:40, emissive:0x221000, emissiveIntensity:0.4, flatShading:true })
+  ); roof.position.y = h*0.53; g.add(roof);
+  const spire = new THREE.Mesh(
+    new THREE.ConeGeometry(0.5, h*0.25, 8),
+    new THREE.MeshPhongMaterial({ color:0xffcc44, specular:0x886622, shininess:80, emissive:0x331800, emissiveIntensity:0.6 })
+  ); spire.position.y = h*0.78; g.add(spire);
+  g.position.set(x, y, z);
+  return g;
+}
+const palaces = [
+  createPalaceSilhouette(85, -6, -75, 32, 22),
+  createPalaceSilhouette(-80, -4, -65, 28, 18),
+  createPalaceSilhouette(65, -8, -85, 36, 24),
+  createPalaceSilhouette(-70, -7, -80, 25, 16),
+  createPalaceSilhouette(95, -5, -45, 22, 15),
+  createPalaceSilhouette(-90, -6, -40, 27, 18),
+];
+palaces.forEach(p => scene.add(p));
+
+// ============================================================
+// HEAVENLY GATE — large decorative gate
+// ============================================================
+function createHeavenlyGate(x, y, z, rotY) {
+  const g = new THREE.Group();
+  g.name = 'heavenlyGate';
+  for (let side = -1; side <= 1; side += 2) {
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(2,24,2),
+      new THREE.MeshPhongMaterial({ color:0xe8dcc0, specular:0x444444, shininess:20, emissive:0x111000, emissiveIntensity:0.2 }));
+    pillar.position.set(side*9, 12, 0); g.add(pillar);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 3),
+      new THREE.MeshPhongMaterial({ color:0xd4af37, specular:0x886622, shininess:80, emissive:0x331800, emissiveIntensity:0.4 }));
+    cap.position.set(side*9, 24.5, 0); g.add(cap);
+  }
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(22, 2.2, 2.8),
+    new THREE.MeshPhongMaterial({ color:0xd4af37, specular:0x886622, shininess:80, emissive:0x331800, emissiveIntensity:0.5 }));
+  beam.position.set(0, 25.5, 0); g.add(beam);
+  const roof = new THREE.Mesh(
+    new THREE.CylinderGeometry(2, 14, 5.5, 8, 1, false, 0, Math.PI),
+    new THREE.MeshPhongMaterial({ color:0xd4af37, specular:0x886622, shininess:80, emissive:0x331800, emissiveIntensity:0.5, side:THREE.DoubleSide }));
+  roof.position.set(0, 27.5, 0); roof.rotation.y = Math.PI/2; g.add(roof);
+  g.position.set(x, y, z); g.rotation.y = rotY;
+  return g;
+}
+const frontGate = createHeavenlyGate(0, 0, PLATFORM_RADIUS + 8, 0);
+scene.add(frontGate);
+
+// ============================================================
+// GOD RAYS
+// ============================================================
+function createGodRay(x, y, z, h, w) {
+  const geo = new THREE.CylinderGeometry(0.1, w, h, 8, 1, true);
+  const mat = new THREE.MeshBasicMaterial({ color:0xfff8e8, transparent:true, opacity:0.035, side:THREE.DoubleSide, depthWrite:false });
+  const ray = new THREE.Mesh(geo, mat);
+  ray.position.set(x, y, z);
+  ray.name = 'godRay';
+  return ray;
+}
+const godRays = [];
+for (let i = 0; i < 8; i++) {
+  const angle = (i/8)*Math.PI*2 + Math.random()*0.3;
+  const dist = 8 + Math.random()*22;
+  const ray = createGodRay(Math.cos(angle)*dist, 45, Math.sin(angle)*dist, 90, 2+Math.random()*4);
+  scene.add(ray);
+  godRays.push({ mesh:ray, angle, dist, phase:Math.random()*Math.PI*2 });
+}
+console.log('✨ God rays: ' + godRays.length);
+
+// ============================================================
+// SKY DOME
+// ============================================================
+const SKY_RADIUS = 480;
+const skyGeo = new THREE.SphereGeometry(SKY_RADIUS, 64, 32);
+const skyPositions = skyGeo.attributes.position.array;
+const skyColorsArr = new Float32Array(skyPositions.length);
+for (let i = 0; i < skyPositions.length; i += 3) {
+  const ny = skyPositions[i+1] / SKY_RADIUS;
+  let r, g, b;
+  if (ny > 0.55) { const t=(ny-0.55)/0.45; r=0.22-t*0.14; g=0.42-t*0.24; b=0.68-t*0.26; }
+  else if (ny > 0.15) { const t=(ny-0.15)/0.40; r=0.52-t*0.30; g=0.65-t*0.23; b=0.76-t*0.08; }
+  else if (ny > -0.08) { const t=(ny+0.08)/0.23; r=0.80+t*0.10; g=0.76+t*0.08; b=0.68+t*0.08; }
+  else { r=0.94; g=0.89; b=0.81; }
+  skyColorsArr[i]=r; skyColorsArr[i+1]=g; skyColorsArr[i+2]=b;
+}
+skyGeo.setAttribute('color', new THREE.BufferAttribute(skyColorsArr, 3));
+const skyDome = new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors:true, side:THREE.BackSide, depthWrite:false }));
+skyDome.name = 'skyDome'; skyDome.renderOrder = -1;
+scene.add(skyDome);
+
+// ============================================================
+// BUILDING MODELS — 磅礴巨物，天庭气势
+// ============================================================
+// Raw model sizes (all centered, Y=0 base):
+//   gate:              10.0m × 8.0m   (already large, raw)
+//   building_temple:    0.97m × 0.79m
+//   building_pagoda:    0.70m × 0.91m
+//   building_spirittree:0.74m × 0.67m
+//   building_shanmen:   1.00m × 1.04m
+//   building_bridge:    0.94m × 0.69m
+//
+// Target: 40-60m wide buildings, 60-100m tall pagoda — IMMENSE divine scale
+// Scale = target / raw
+// ============================================================
+
+// Heavenly color: white jade → vermillion → gold (no random noise)
+function applyHeavenlyColors(mesh) {
+  const geo = mesh.geometry;
+  if (!geo.attributes.position) return;
+  const pos = geo.attributes.position.array;
+  let yMin=Infinity, yMax=-Infinity;
+  for (let i=0; i<pos.length; i+=3) { const y=pos[i+1]; if(y<yMin)yMin=y; if(y>yMax)yMax=y; }
+  const yRange=yMax-yMin||1;
+  const colors=new Float32Array(pos.length);
+  for (let i=0; i<pos.length; i+=3) {
+    const t=(pos[i+1]-yMin)/yRange;
+    let r,g,b;
+    if(t<0.08)       { r=0.98;g=0.97;b=0.93; }        // white jade base
+    else if(t<0.25)  { const s=(t-0.08)/0.17; r=0.98-s*0.12;g=0.97-s*0.60;b=0.93-s*0.72; }
+    else if(t<0.55)  { r=0.86;g=0.15;b=0.08; }        // vermillion body
+    else if(t<0.72)  { const s=(t-0.55)/0.17; r=0.86+s*0.12;g=0.15+s*0.62;b=0.08+s*0.28; }
+    else              { r=0.98;g=0.82;b=0.35; }        // bright gold roof
+    colors[i]=r;colors[i+1]=g;colors[i+2]=b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+}
+
+// MASSIVE scale — 天庭巨物, widely spaced for grandeur
+const buildingConfigs = [
+  // 凌霄宝塔: 最远处，视觉终点
+  { file:'/models/building_pagoda.glb',    x:0,   y:0.5, z:-120, rot:0,     scale:65.0, name:'凌霄宝塔' },
+  // 通天灵树: 中轴线中段
+  { file:'/models/building_spirittree.glb', x:0,  y:0.5, z:-60,  rot:0,     scale:55.0, name:'通天灵树' },
+  // 太虚宝殿: 左前侧远处
+  { file:'/models/building_temple.glb',    x:-70, y:0.5, z:-40,  rot:0.5,   scale:48.0, name:'太虚宝殿' },
+  // 天门·右: 右前侧远处
+  { file:'/models/building_shanmen.glb',   x:70,  y:0.5, z:-40,  rot:-0.5,  scale:48.0, name:'天门·右' },
+  // 玉虚仙桥: 左后方
+  { file:'/models/building_bridge.glb',    x:-55, y:0.5, z:-90,  rot:-0.3,  scale:48.0, name:'玉虚仙桥' },
+  // 内天门: 正面入口，平台前方
+  { file:'/models/gate.glb',              x:0,   y:0.5, z:40,   rot:Math.PI, scale:5.0,  name:'内天门' },
+];
+
+// Store building bounding boxes for collision
+const buildingColliders = []; // { box: THREE.Box3, name: string }
+
+const loadBuilding = (cfg) => {
+  console.log('🔄 Loading: '+cfg.name);
+  gltfLoader.load(cfg.file, (gltf) => {
+    const model = gltf.scene;
+    model.position.set(cfg.x, cfg.y, cfg.z);
+    model.rotation.y = cfg.rot;
+    model.scale.setScalar(cfg.scale);
+    model.traverse(node => {
+      if (node.isMesh) {
+        applyHeavenlyColors(node);
+        node.material = new THREE.MeshPhongMaterial({
+          vertexColors:true, specular:0x222222, shininess:25, side:THREE.DoubleSide,
+        });
+      }
+    });
+    model.name = cfg.name;
+    scene.add(model);
+
+    // Compute world-space bounding box after position/rotation/scale applied
+    model.updateMatrixWorld();
+    const box = new THREE.Box3().setFromObject(model);
+    // Shrink slightly so player can still get close
+    box.expandByScalar(-1.5);
+    buildingColliders.push({ box, name: cfg.name });
+    console.log('✅ Loaded + collider:', cfg.name, 'box:', box.min.toArray().map(v=>v.toFixed(1)), box.max.toArray().map(v=>v.toFixed(1)));
+  }, (p) => {
+    if(p.loaded&&p.total&&p.loaded===p.total) console.log('  ✅ 100%: '+cfg.name);
+  }, (err) => console.warn('  ❌ Failed: '+cfg.name, err.message||err));
+};
+
+setTimeout(() => {
+  buildingConfigs.forEach((cfg,i) => setTimeout(()=>loadBuilding(cfg), i*600));
+}, 800);
+
+// ============================================================
+// INTERACTIVE PROPS — Danlu (furnace) + Xianjian (sword)
+// ============================================================
+// INTERACTIVE PROPS — Danlu (furnace) + Xianjian (sword)
+// ============================================================
+const interactiveProps = [];
+
+// Alchemy Furnace 丹炉
+function createDanlu(x, y, z) {
+  const g = new THREE.Group();
+  g.name = 'interactiveProp';
+  g.userData = { id:'danlu', found:false, promptText:'按 E 查看丹炉', interactionType:'view' };
+
+  // Base
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.2, 1.5, 0.6, 16),
+    new THREE.MeshPhongMaterial({ color:0x665544, specular:0x333333, shininess:20 })
+  ); base.position.y = 0.3; g.add(base);
+
+  // Furnace body
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 16, 14, 0, Math.PI*2, 0, Math.PI*0.7),
+    new THREE.MeshPhongMaterial({ color:0x885533, specular:0x664422, shininess:40, emissive:0x220000, emissiveIntensity:0.4 })
+  ); body.position.y = 0.8; g.add(body);
+
+  // Golden rim
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(1, 0.12, 8, 24),
+    new THREE.MeshPhongMaterial({ color:0xd4af37, specular:0x886622, shininess:80, emissive:0x331100, emissiveIntensity:0.5 })
+  ); rim.position.y = 1.2; rim.rotation.x = Math.PI/2; g.add(rim);
+
+  // Inner glow particle
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.4, 8, 8),
+    new THREE.MeshBasicMaterial({ color:0xff6633, transparent:true, opacity:0.6, depthWrite:false })
+  ); glow.position.y = 1.0; g.add(glow);
+  glow.name = 'furnaceGlow';
+
+  // Smoke wisps above
+  for (let i=0; i<3; i++) {
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.25, 6, 6),
+      new THREE.MeshBasicMaterial({ color:0xeeddcc, transparent:true, opacity:0.3, depthWrite:false })
+    ); smoke.position.y = 1.5 + i*0.4;
+    smoke.position.x = (Math.random()-0.5)*0.3;
+    smoke.position.z = (Math.random()-0.5)*0.3;
+    smoke.name = 'furnaceSmoke';
+    g.add(smoke);
+  }
+
+  g.position.set(x, y, z);
+  interactiveProps.push({ group:g, id:'danlu', found:false, type:'view' });
+  return g;
+}
+
+// Immortal Sword 仙剑
+function createXianjian(x, y, z) {
+  const g = new THREE.Group();
+  g.name = 'interactiveProp';
+  g.userData = { id:'xianjian', found:false, promptText:'按 E 收集仙剑', interactionType:'collect' };
+
+  // Stone pedestal
+  const pedestal = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.6, 0.8, 1.2, 12),
+    new THREE.MeshPhongMaterial({ color:0xd0c8b8, specular:0x333333, shininess:15 })
+  ); pedestal.position.y = 0.6; g.add(pedestal);
+
+  // Sword blade
+  const blade = new THREE.Mesh(
+    new THREE.BoxGeometry(0.08, 2.5, 0.04),
+    new THREE.MeshPhongMaterial({ color:0xddeeff, specular:0xffffff, shininess:90, emissive:0x112233, emissiveIntensity:0.6 })
+  ); blade.position.y = 2.5; g.add(blade);
+
+  // Sword guard
+  const guard = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.08, 0.15),
+    new THREE.MeshPhongMaterial({ color:0xd4af37, specular:0x886622, shininess:80 })
+  ); guard.position.y = 1.3; g.add(guard);
+
+  // Sword hilt
+  const hilt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.08, 0.5, 8),
+    new THREE.MeshPhongMaterial({ color:0x664422, specular:0x222222, shininess:15 })
+  ); hilt.position.y = 1.0; g.add(hilt);
+
+  // Pommel gem
+  const gem = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 8, 8),
+    new THREE.MeshBasicMaterial({ color:0x88ddff })
+  ); gem.position.y = 0.72; g.add(gem);
+
+  // Glowing halo around blade
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(0.5, 8, 8),
+    new THREE.MeshBasicMaterial({ color:0xaaddff, transparent:true, opacity:0.2, depthWrite:false })
+  ); halo.position.y = 2.5; g.add(halo);
+  halo.name = 'swordHalo';
+
+  g.position.set(x, y, z);
+  interactiveProps.push({ group:g, id:'xianjian', found:false, type:'collect' });
+  return g;
+}
+
+scene.add(createDanlu(-18, 0.05, 10));
+scene.add(createXianjian(18, 0.05, -12));
+console.log('🧪 Interactive props: danlu + xianjian');
+
+// ============================================================
+// PARTICLES — golden motes + cherry petals + cloud wisps
+// ============================================================
+
+// Golden motes
+const moteCount = 200;
+const motePositions = new Float32Array(moteCount*3);
+const moteData=[];
+for (let i=0;i<moteCount;i++) {
+  motePositions[i*3]=(Math.random()-0.5)*120;
+  motePositions[i*3+1]=1+Math.random()*35;
+  motePositions[i*3+2]=(Math.random()-0.5)*120;
+  moteData.push({ baseY:motePositions[i*3+1], phase:Math.random()*Math.PI*2, speed:0.3+Math.random()*1.1 });
+}
+const moteGeo = new THREE.BufferGeometry();
+moteGeo.setAttribute('position', new THREE.BufferAttribute(motePositions,3));
+const motes = new THREE.Points(moteGeo, new THREE.PointsMaterial({ color:0xffe8a0, size:0.45, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.6 }));
+motes.name = 'goldenMotes'; scene.add(motes);
+
+// Cherry petals
+const petalCount = 80;
+const petalPositions = new Float32Array(petalCount*3);
+const petalData=[];
+for (let i=0;i<petalCount;i++) {
+  petalPositions[i*3]=(Math.random()-0.5)*100;
+  petalPositions[i*3+1]=1+Math.random()*28;
+  petalPositions[i*3+2]=(Math.random()-0.5)*100;
+  petalData.push({ vy:-(Math.random()*0.035+0.01), vx:(Math.random()-0.5)*0.022, vz:(Math.random()-0.5)*0.022, wobble:Math.random()*0.04+0.01, ws:Math.random()*2+1 });
+}
+const petalGeo = new THREE.BufferGeometry();
+petalGeo.setAttribute('position', new THREE.BufferAttribute(petalPositions,3));
+const petals = new THREE.Points(petalGeo, new THREE.PointsMaterial({ color:0xf8c0d0, size:0.55, blending:THREE.NormalBlending, depthWrite:false, transparent:true, opacity:0.5 }));
+petals.name = 'cherryPetals'; scene.add(petals);
+
+// Cloud wisps
+const wispCount = 35;
+const wispPositions = new Float32Array(wispCount*3);
+const wispData=[];
+for (let i=0;i<wispCount;i++) {
+  wispPositions[i*3]=(Math.random()-0.5)*150;
+  wispPositions[i*3+1]=-2+Math.random()*14;
+  wispPositions[i*3+2]=(Math.random()-0.5)*150;
+  wispData.push({ baseY:wispPositions[i*3+1], phase:Math.random()*Math.PI*2 });
+}
+const wispGeo = new THREE.BufferGeometry();
+wispGeo.setAttribute('position', new THREE.BufferAttribute(wispPositions,3));
+const wisps = new THREE.Points(wispGeo, new THREE.PointsMaterial({ color:0xfaf8f4, size:2.2, blending:THREE.NormalBlending, depthWrite:false, transparent:true, opacity:0.3 }));
+wisps.name = 'cloudWisps'; scene.add(wisps);
+
+console.log('✨ Particles: motes='+moteCount+' petals='+petalCount+' wisps='+wispCount);
+
+// ============================================================
+// DISTANT PEAKS RING
+// ============================================================
+const peakRing = new THREE.Group();
+peakRing.name = 'distantPeaks';
+for (let i=0;i<55;i++) {
+  const angle=(i/55)*Math.PI*2;
+  const dist=170+Math.random()*90;
+  const h=12+Math.random()*38;
+  const w=3+Math.random()*9;
+  const peak=new THREE.Mesh(new THREE.ConeGeometry(w,h,6,3),
+    new THREE.MeshPhongMaterial({ color:new THREE.Color().setHSL(0.55+Math.random()*0.1,0.05,0.48+Math.random()*0.32), specular:0x111111, shininess:3, flatShading:true, transparent:true, opacity:0.55+Math.random()*0.35 }));
+  peak.position.set(Math.cos(angle)*dist, -8+h*0.28, Math.sin(angle)*dist);
+  peak.rotation.z=(Math.random()-0.5)*0.3;
+  peakRing.add(peak);
+}
+scene.add(peakRing);
+
+// ============================================================
+// EXPLORATION STATE
+// ============================================================
+let exploreState = { danlu:false, xianjian:false };
+
+function updateExplorationUI() {
+  const foundCount = (exploreState.danlu?1:0) + (exploreState.xianjian?1:0);
+  document.getElementById('dot-danlu').className = 'explore-dot ' + (exploreState.danlu?'found':'missing');
+  document.getElementById('dot-sword').className = 'explore-dot ' + (exploreState.xianjian?'found':'missing');
+  document.getElementById('progress-text').textContent = foundCount + ' / 2';
+  if (foundCount === 2) {
+    document.getElementById('progress-text').textContent = '✨ 探索完成 ✨';
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+const clock = new THREE.Clock();
+let frames = 0;
+const raycaster = new THREE.Raycaster();
+raycaster.far = 6; // interaction range
+const promptEl = document.getElementById('interact-prompt');
+const KEY_E = 'KeyE';
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.1);
+  const elapsed = performance.now() * 0.001;
+
+  // Golden motes
+  const mp = motes.geometry.attributes.position.array;
+  for (let i=0;i<moteCount;i++) {
+    const d=moteData[i];
+    mp[i*3+1]=d.baseY+Math.sin(elapsed*d.speed+d.phase)*5;
+    mp[i*3]+=Math.sin(elapsed*0.4+d.phase)*0.014;
+    mp[i*3+2]+=Math.cos(elapsed*0.4+d.phase)*0.014;
+    if(Math.abs(mp[i*3])>60)mp[i*3]*=-0.95;
+    if(Math.abs(mp[i*3+2])>60)mp[i*3+2]*=-0.95;
+  }
+  motes.geometry.attributes.position.needsUpdate=true;
+
+  // Petals
+  const pp=petals.geometry.attributes.position.array;
+  for (let i=0;i<petalCount;i++) {
+    const pd=petalData[i];
+    pp[i*3+1]+=pd.vy;
+    pp[i*3]+=pd.vx+Math.sin(elapsed*pd.ws+i)*pd.wobble;
+    pp[i*3+2]+=pd.vz+Math.cos(elapsed*pd.ws+i)*pd.wobble;
+    if(pp[i*3+1]<-5){pp[i*3+1]=28;pp[i*3]=(Math.random()-0.5)*100;pp[i*3+2]=(Math.random()-0.5)*100;}
+  }
+  petals.geometry.attributes.position.needsUpdate=true;
+
+  // Cloud wisps
+  const wp=wisps.geometry.attributes.position.array;
+  for (let i=0;i<wispCount;i++) {
+    const d=wispData[i];
+    wp[i*3+1]=d.baseY+Math.sin(elapsed*0.6+d.phase)*2;
+    wp[i*3]+=Math.sin(elapsed*0.3+d.phase)*0.02;
+    wp[i*3+2]+=Math.cos(elapsed*0.3+d.phase)*0.02;
+    if(Math.abs(wp[i*3])>75)wp[i*3]*=-0.95;
+    if(Math.abs(wp[i*3+2])>75)wp[i*3+2]*=-0.95;
+  }
+  wisps.geometry.attributes.position.needsUpdate=true;
+
+  // Cloud layers
+  scene.children.forEach(c => {
+    if (c.name==='cloudLayer') {
+      c.children.forEach(cloud => {
+        const ud=cloud.userData;
+        if(ud.baseY!==undefined){cloud.position.y=ud.baseY+Math.sin(elapsed*ud.speed+ud.phase)*1.2;cloud.position.x+=Math.cos(elapsed*0.2+ud.phase)*0.015;}
+      });
+    }
+  });
+
+  // Floating cloud bobbing
+  scene.children.forEach(c => {
+    if(c.name==='cloudPlatform'&&c.userData.baseY!==undefined){c.position.y=c.userData.baseY+Math.sin(elapsed*0.4+c.userData.phase)*2;}
+  });
+
+  // God rays
+  godRays.forEach(gr=>{
+    gr.mesh.material.opacity=0.022+Math.sin(elapsed*0.7+gr.phase)*0.012;
+    gr.mesh.position.x=Math.cos(gr.angle+elapsed*0.05)*gr.dist;
+    gr.mesh.position.z=Math.sin(gr.angle+elapsed*0.05)*gr.dist;
+  });
+
+  // Furnace glow pulse
+  scene.children.forEach(c => {
+    if (c.name==='interactiveProp') {
+      c.children.forEach(child => {
+        if (child.name==='furnaceGlow') { child.scale.setScalar(1+Math.sin(elapsed*3)*0.2); child.material.opacity=0.5+Math.sin(elapsed*3)*0.2; }
+        if (child.name==='furnaceSmoke') { child.position.y += Math.sin(elapsed*2+child.position.x)*0.003; child.material.opacity=0.2+Math.sin(elapsed*1.5+child.position.z)*0.1; }
+        if (child.name==='swordHalo') { child.scale.setScalar(1+Math.sin(elapsed*2.5)*0.15); child.material.opacity=0.15+Math.sin(elapsed*2.5)*0.08; }
+      });
+    }
+  });
+
+  skyDome.rotation.y += dt * 0.008;
+
+  // ============================================================
+  // PROXIMITY DETECTION — interactive props
+  // ============================================================
+  raycaster.set(camera.position, new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion));
+  let nearestProp = null;
+  let nearestDist = Infinity;
+  interactiveProps.forEach(prop => {
+    if (prop.found) return;
+    const intersects = raycaster.intersectObject(prop.group, true);
+    if (intersects.length > 0 && intersects[0].distance < nearestDist) {
+      nearestDist = intersects[0].distance;
+      nearestProp = prop;
+    }
+  });
+
+  if (nearestProp && nearestDist < 5.5) {
+    promptEl.textContent = nearestProp.type==='collect' ? '按 E 收集仙剑' : '按 E 查看丹炉';
+    promptEl.classList.add('visible');
+    if (keys[KEY_E] && !keys._eHandled) {
+      keys._eHandled = true;
+      if (nearestProp.id === 'danlu' && !exploreState.danlu) {
+        exploreState.danlu = true;
+        nearestProp.found = true;
+        console.log('🔍 查看了丹炉！');
+        updateExplorationUI();
+      }
+      if (nearestProp.id === 'xianjian' && !exploreState.xianjian) {
+        exploreState.xianjian = true;
+        nearestProp.found = true;
+        console.log('🗡️ 收集了仙剑！');
+        updateExplorationUI();
+        // Fade sword out when collected
+        nearestProp.group.children.forEach(c => { if(c.material&&c.material.opacity!==undefined)c.material.opacity*=0.3; });
+      }
+    }
+  } else {
+    promptEl.classList.remove('visible');
+  }
+
+  renderer.render(scene, camera);
+  frames++;
+
+  if (frames===1) console.log('🎬 FIRST FRAME! Objects: '+scene.children.length);
+
+  if (frames%10===0) {
+    document.getElementById('coord-x').textContent = camera.position.x.toFixed(1);
+    document.getElementById('coord-y').textContent = camera.position.y.toFixed(1);
+    document.getElementById('coord-z').textContent = camera.position.z.toFixed(1);
+  }
+}
+
+// ============================================================
+// CONTROLS — PRESERVED
+// ============================================================
+const keys = {};
+let isFlying = false;
+let isLocked = false;
+
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyF') {
+    isFlying = !isFlying;
+    const toast = document.getElementById('mode-toast');
+    toast.textContent = isFlying ? '🦅 御风飞行' : '🚶 步行';
+    toast.classList.add('visible');
+    setTimeout(() => toast.classList.remove('visible'), 1500);
+  }
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; if(e.code===KEY_E)keys._eHandled=false; });
+document.addEventListener('click', () => document.body.requestPointerLock());
+document.addEventListener('pointerlockchange', () => { isLocked = document.pointerLockElement === document.body; });
+document.addEventListener('mousemove', e => {
+  if (!isLocked) return;
+  camera.rotation.y -= e.movementX * 0.002;
+  camera.rotation.x -= e.movementY * 0.002;
+  camera.rotation.x = Math.max(-1.4, Math.min(1.4, camera.rotation.x));
+});
+
+// Movement
+setInterval(() => {
+  const baseSpeed = isFlying ? 0.5 : 0.2;
+  const boost = keys['ShiftLeft'] || keys['ShiftRight'] ? 2.5 : 1;
+  const spd = baseSpeed * boost;
+
+  const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+  dir.y = 0; dir.normalize();
+  const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0,1,0)).normalize();
+
+  if (keys['KeyW']) camera.position.addScaledVector(dir, spd);
+  if (keys['KeyS']) camera.position.addScaledVector(dir, -spd);
+  if (keys['KeyA']) camera.position.addScaledVector(right, -spd);
+  if (keys['KeyD']) camera.position.addScaledVector(right, spd);
+  if (isFlying && keys['Space']) camera.position.y += spd;
+  if (isFlying && keys['KeyQ']) camera.position.y -= spd;
+
+  // Building collision — push player out of any building bounding box
+  const playerPos = camera.position.clone();
+  const playerRad = 1.2; // player radius
+  for (const bc of buildingColliders) {
+    const box = bc.box;
+    // Find closest point on box to player
+    const closest = new THREE.Vector3(
+      Math.max(box.min.x, Math.min(playerPos.x, box.max.x)),
+      Math.max(box.min.y, Math.min(playerPos.y, box.max.y)),
+      Math.max(box.min.z, Math.min(playerPos.z, box.max.z))
+    );
+    const dist = playerPos.distanceTo(closest);
+    if (dist < playerRad) {
+      // Push player outward from closest point
+      const pushDir = playerPos.clone().sub(closest).normalize();
+      if (pushDir.length() < 0.001) {
+        // Player is exactly at closest point — push up
+        pushDir.set(0, 1, 0);
+      }
+      camera.position.copy(closest.clone().addScaledVector(pushDir, playerRad));
+    }
+  }
+
+  if (!isFlying) {
+    camera.position.y = 1.8;
+    const dx=camera.position.x, dz=camera.position.z;
+    const dist=Math.sqrt(dx*dx+dz*dz);
+    const maxDist=PLATFORM_RADIUS-1.5;
+    if(dist>maxDist){const s=maxDist/dist;camera.position.x*=s;camera.position.z*=s;}
+  }
+  if (isFlying) {
+    camera.position.x=Math.max(-200,Math.min(200,camera.position.x));
+    camera.position.y=Math.max(1,Math.min(180,camera.position.y));
+    camera.position.z=Math.max(-200,Math.min(200,camera.position.z));
+  }
+
+  document.getElementById('mode-display').textContent = isFlying?'御风·飞行':'步行';
+  document.getElementById('speed-display').textContent = spd>0.6?'⚡ 加速':(spd>0.2?'🚶 移动':'🧘 静止');
+}, 16);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+setTimeout(() => {
+  const loadEl = document.getElementById('loading');
+  if(loadEl){loadEl.classList.add('hidden');setTimeout(()=>loadEl.remove(),1000);}
+}, 3000);
+
+console.log('🐉 天庭仙境启动...');
+animate();
+</script>
+</body>
+</html>

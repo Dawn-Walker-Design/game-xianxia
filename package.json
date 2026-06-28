@@ -1,0 +1,18 @@
+{
+  "name": "xianxia-explorer",
+  "version": "1.0.0",
+  "description": "仙侠风3D探索游戏 - Xianxia Exploration Game",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "npx vite",
+    "build": "npx vite build",
+    "preview": "npx vite preview"
+  },
+  "dependencies": {
+    "three": "^0.184.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
